@@ -1,9 +1,11 @@
 :7070 {
-  @blank {
-    path /*
+  @api {
+    path /api/*
   }
 
-  route @blank {
-    blank stdout
+  respond @api "allowed"
+
+  route @api {
+    opa authz.rego
   }
 }

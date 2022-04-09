@@ -1,15 +1,15 @@
 package middleware
 
 import (
-	"fmt"
-	"io"
+	"context"
 	"net/http"
-	"os"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	"github.com/caddyserver/caddy/v2/caddyconfig/httpcaddyfile"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
+
+	"github.com/open-policy-agent/opa/rego"
 )
 
 var (
@@ -21,7 +21,7 @@ var (
 
 func init() {
 	caddy.RegisterModule(Middleware{})
-	httpcaddyfile.RegisterHandlerDirective("blank", func(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, error) {
+	httpcaddyfile.RegisterHandlerDirective("opa", func(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, error) {
 		var m Middleware
 		err := m.UnmarshalCaddyfile(h.Dispenser)
 		return m, err
@@ -29,46 +29,62 @@ func init() {
 }
 
 type Middleware struct {
-	Output string `json:"output,omitempty"`
-	w      io.Writer
+	Policy string `json:"policy"`
+	rego   func(*rego.Rego)
 }
 
 func (Middleware) CaddyModule() caddy.ModuleInfo {
 	return caddy.ModuleInfo{
-		ID:  "http.handlers.blank",
+		ID:  "http.handlers.opa",
 		New: func() caddy.Module { return new(Middleware) },
 	}
 }
 
 func (m *Middleware) Provision(ctx caddy.Context) error {
-	switch m.Output {
-	case "stdout":
-		m.w = os.Stdout
-	case "stderr":
-		m.w = os.Stderr
-	default:
-		return fmt.Errorf("an output stream is required")
+	if len(m.Policy) > 0 {
+		m.rego = rego.Load([]string{m.Policy}, nil)
 	}
+
 	return nil
 }
 
 func (m *Middleware) Validate() error {
-	if m.w == nil {
-		return fmt.Errorf("no writer")
-	}
 	return nil
 }
 
 func (m Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
-	m.w.Write([]byte(r.RemoteAddr))
-	return next.ServeHTTP(w, r)
+	ctx := context.TODO()
+
+	input := make(map[string]interface{})
+	input["method"] = r.Method
+
+	target, err := rego.New(rego.Query("data.authz.allow"), m.rego).PrepareForEval(ctx)
+	if err != nil {
+		return caddyhttp.Error(http.StatusForbidden, err)
+	}
+
+	result, err := target.Eval(ctx, rego.EvalInput(input))
+	if err != nil || len(result) == 0 || !result.Allowed() {
+		return caddyhttp.Error(http.StatusForbidden, err)
+	}
+
+	err = next.ServeHTTP(w, r)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (m *Middleware) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
-	for d.Next() {
-		if !d.Args(&m.Output) {
-			return d.ArgErr()
-		}
+	d.Next()
+
+	args := d.RemainingArgs()
+
+	if len(args) == 1 {
+		d.NextArg()
+		m.Policy = d.Val()
 	}
+
 	return nil
 }
