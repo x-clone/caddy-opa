@@ -1,0 +1,9 @@
+:7070 {
+  @blank {
+    path /*
+  }
+
+  route @blank {
+    blank stdout
+  }
+}
