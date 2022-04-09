@@ -3,6 +3,8 @@ package middleware
 import (
 	"context"
 	"net/http"
+	"regexp"
+	"strings"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
@@ -57,15 +59,24 @@ func (m Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddy
 
 	input := make(map[string]interface{})
 	input["method"] = r.Method
+	input["path"] = strings.Split(r.URL.Path[1:], "/")
 
-	target, err := rego.New(rego.Query("data.authz.allow"), m.rego).PrepareForEval(ctx)
+	authHeader := r.Header.Get("Authorization")
+	if len(authHeader) > 0 {
+		match := regexp.MustCompile(`^Bearer\s+(\S+)$`).FindStringSubmatch(authHeader)
+		if len(match) > 0 {
+			input["identity"] = match[1]
+		}
+	}
+
+	target, err := rego.New(rego.Query("data.system.authz.allow"), m.rego).PrepareForEval(ctx)
 	if err != nil {
-		return caddyhttp.Error(http.StatusForbidden, err)
+		return caddyhttp.Error(http.StatusUnauthorized, err)
 	}
 
 	result, err := target.Eval(ctx, rego.EvalInput(input))
 	if err != nil || len(result) == 0 || !result.Allowed() {
-		return caddyhttp.Error(http.StatusForbidden, err)
+		return caddyhttp.Error(http.StatusUnauthorized, err)
 	}
 
 	err = next.ServeHTTP(w, r)
