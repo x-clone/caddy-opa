@@ -31,8 +31,8 @@ func init() {
 }
 
 type Middleware struct {
-	Policy string `json:"policy"`
-	rego   func(*rego.Rego)
+	Bundle   string `json:"bundle"`
+	prepared rego.PreparedEvalQuery
 }
 
 func (Middleware) CaddyModule() caddy.ModuleInfo {
@@ -42,19 +42,20 @@ func (Middleware) CaddyModule() caddy.ModuleInfo {
 	}
 }
 
-func (m *Middleware) Provision(ctx caddy.Context) error {
-	if len(m.Policy) > 0 {
-		m.rego = rego.Load([]string{m.Policy}, nil)
+func (m *Middleware) Provision(ctx caddy.Context) (err error) {
+	m.prepared, err = rego.New(rego.Query("data.system.authz.allow"), rego.LoadBundle(m.Bundle)).PrepareForEval(ctx)
+	if err != nil {
+		return caddyhttp.Error(http.StatusInternalServerError, err)
 	}
 
 	return nil
 }
 
-func (m *Middleware) Validate() error {
+func (m *Middleware) Validate() (err error) {
 	return nil
 }
 
-func (m Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
+func (m Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) (err error) {
 	ctx := context.TODO()
 
 	input := make(map[string]interface{})
@@ -69,12 +70,7 @@ func (m Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddy
 		}
 	}
 
-	target, err := rego.New(rego.Query("data.system.authz.allow"), m.rego).PrepareForEval(ctx)
-	if err != nil {
-		return caddyhttp.Error(http.StatusUnauthorized, err)
-	}
-
-	result, err := target.Eval(ctx, rego.EvalInput(input))
+	result, err := m.prepared.Eval(ctx, rego.EvalInput(input))
 	if err != nil || len(result) == 0 || !result.Allowed() {
 		return caddyhttp.Error(http.StatusUnauthorized, err)
 	}
@@ -87,14 +83,27 @@ func (m Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddy
 	return nil
 }
 
-func (m *Middleware) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
+func (m *Middleware) UnmarshalCaddyfile(d *caddyfile.Dispenser) (err error) {
 	d.Next()
 
-	args := d.RemainingArgs()
+	for i := d.Nesting(); d.NextBlock(i); {
+		token := d.Val()
+		switch token {
+		case "bundle":
+			if !d.NextArg() {
+				return d.Err("Missing policy bundle")
+			}
 
-	if len(args) == 1 {
-		d.NextArg()
-		m.Policy = d.Val()
+			m.Bundle = d.Val()
+
+			if d.NextArg() {
+				return d.ArgErr()
+			}
+
+			return nil
+		default:
+			return d.Errf("unrecognized subdirective: '%s'", token)
+		}
 	}
 
 	return nil

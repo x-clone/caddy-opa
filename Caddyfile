@@ -6,6 +6,8 @@
   respond @api "allowed"
 
   route @api {
-    opa authz.rego
+    opa {
+      bundle .
+    }
   }
 }
