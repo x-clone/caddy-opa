@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"context"
 	"net/http"
 	"regexp"
 	"strings"
@@ -20,6 +19,8 @@ var (
 	_ caddyhttp.MiddlewareHandler = (*Middleware)(nil)
 	_ caddyfile.Unmarshaler       = (*Middleware)(nil)
 )
+
+var bearer = regexp.MustCompile(`^Bearer\s+(\S+)$`)
 
 func init() {
 	caddy.RegisterModule(Middleware{})
@@ -56,21 +57,19 @@ func (m *Middleware) Validate() (err error) {
 }
 
 func (m Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) (err error) {
-	ctx := context.TODO()
-
 	input := make(map[string]interface{})
 	input["method"] = r.Method
 	input["path"] = strings.Split(r.URL.Path[1:], "/")
 
 	authHeader := r.Header.Get("Authorization")
 	if len(authHeader) > 0 {
-		match := regexp.MustCompile(`^Bearer\s+(\S+)$`).FindStringSubmatch(authHeader)
+		match := bearer.FindStringSubmatch(authHeader)
 		if len(match) > 0 {
 			input["identity"] = match[1]
 		}
 	}
 
-	result, err := m.prepared.Eval(ctx, rego.EvalInput(input))
+	result, err := m.prepared.Eval(r.Context(), rego.EvalInput(input))
 	if err != nil || len(result) == 0 || !result.Allowed() {
 		return caddyhttp.Error(http.StatusUnauthorized, err)
 	}
