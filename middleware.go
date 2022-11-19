@@ -61,12 +61,9 @@ func (m Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddy
 	input["method"] = r.Method
 	input["path"] = strings.Split(r.URL.Path[1:], "/")
 
-	authHeader := r.Header.Get("Authorization")
+	authHeader := r.Header.Get("X-Auth-Bearer")
 	if len(authHeader) > 0 {
-		match := bearer.FindStringSubmatch(authHeader)
-		if len(match) > 0 {
-			input["identity"] = match[1]
-		}
+		input["identity"] = authHeader
 	}
 
 	result, err := m.prepared.Eval(r.Context(), rego.EvalInput(input))
