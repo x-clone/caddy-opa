@@ -64,6 +64,8 @@ func (m Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddy
 	authHeader := r.Header.Get("X-Auth-Bearer")
 	if len(authHeader) > 0 {
 		input["identity"] = authHeader
+	} else {
+		input["identity"] = ""
 	}
 
 	result, err := m.prepared.Eval(r.Context(), rego.EvalInput(input))
